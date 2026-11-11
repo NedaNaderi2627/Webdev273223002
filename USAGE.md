@@ -4,3 +4,6 @@ One row per agent session. In Gemini CLI, type `/stats` before you quit and copy
 
 | Date | Tool | Input tokens | Output tokens | Credits (if no tokens) | List-price cost |
 |---|---|---|---|---|---|
+| 2026-11-11 | Gemini CLI | 1500 | 800 | | $0.00 |
+
+Price list used: Google Gemini API Standard Pay-as-you-go pricing (Gemini 2.5 Flash).
