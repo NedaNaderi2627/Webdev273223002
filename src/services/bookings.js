@@ -6,12 +6,13 @@ import {
 } from '../data/bookings.js';
 
 export class BookingConflictError extends Error {
-  constructor(message = 'Booking slot already taken') {
+  constructor(message = 'Time slot is already booked') {
     super(message);
     this.name = 'BookingConflictError';
     this.status = 409;
   }
 }
+
 
 export class NotOwnerError extends Error {
   constructor(message = 'Unauthorized to cancel this booking') {
