@@ -21,25 +21,26 @@ lab booking
 ## Constraints
 - The project must be completed and testable within the simple course stack (Node.js, SQLite).
 - Every acceptance criterion must be checkable in under a minute.
+
 ## The model feature
 <!-- Which model, which modality, and what it does for a user.
      Name three things or the check fails: the input it receives, the output it produces,
      and what happens when the model is slow, rate-limited or wrong. -->
-- Model:Gemini 2.5 Flash
-- Input:User's requested service type and preferred date/time range.
-- Output:Recommended optimal available time slot for the lab booking.
-- When it fails:Falls back to showing standard available time slots manually without AI recommendation if the model is slow or rate-limited.
+- Model: Gemini 2.5 Flash
+- Input: User's requested service type and preferred date/time range.
+- Output: Recommended optimal available time slot for the lab booking.
+- When it fails: Falls back to showing standard available time slots manually without AI recommendation if the model is slow or rate-limited.
 
 ## Auth
 <!-- Local sign-in plus at least one provider. Say how an account signing in both ways stays one account. -->
-- Local:Username and password stored securely in SQLite database.
-- Provider:OAuth / GitHub or Google login as external provider.
-- Linking:Accounts are linked by matching the verified email address.
+- Local: Username and password stored securely in SQLite database.
+- Provider: OAuth / GitHub or Google login as external provider.
+- Linking: Accounts are linked by matching the verified email address.
 
 ## MCP tools
 <!-- At least three tools your own MCP server exposes over this project's data.
      Each tool calls the same service functions the HTTP API calls, so the same rules apply.
-     A description shorter than 20 characters is not a description. -->
+     A description shorter than 20 characters is not description. -->
 | Tool | What it does | Who may call it |
 | --- | --- | --- |
 | check_availability | Checks available time slots for a given lab and date | Authenticated user or system |
@@ -60,6 +61,7 @@ lab booking
   3. Controller: `controllers/bookingController.js` (Processes logic and validates user input).
   4. Service / Model: `models/bookingModel.js` (Interacts with SQLite database).
 - Exception / Architectural Deviation: AI recommendation logic in `services/aiService.js` is called directly from the controller rather than going through a dedicated middleware layer, deviating slightly from strict separation of concerns for simplicity.
+
 ## Acceptance criteria
 - [AC-1] [Auth] A user who enters incorrect credentials on the sign-in screen sees "Invalid username or password", and no session token is issued.
 - [AC-2] [Booking] A user who requests a time slot that overlaps with an existing booking sees "Time slot is already booked", and no new row appears in the `bookings` table.
@@ -75,12 +77,22 @@ lab booking
 - [AC-10] After signing in with a seeded account, the user sees the list of available labs loaded directly from the database.
 - [AC-11] Deleting a lab row directly in the database and reloading the page removes that lab from the user's screen.
 
+### Slice 2: book a workstation
+- [AC-12] A booking needs an existing, active workstation, a date that is not past, and a valid time slot.
+- [AC-13] A second booking of the same workstation, day, and slot is refused with 409 and a message naming the workstation.
+- [AC-14] A request with no session is refused with 401 Unauthorized before the service is called.
+- [AC-15] A user trying to cancel someone else's booking receives a 403 Forbidden error.
+
 ## Traceability
 | Criterion | Test |
 | --- | --- |
 | AC-1 | test('AC-1 invalid credentials show error and deny access') |
 | AC-2 | test('AC-2 overlapping booking is refused with error') |
 | AC-3 | test('AC-3 ai recommendation falls back correctly on failure') |
+| AC-12 | test('AC-12 valid booking is created successfully') |
+| AC-13 | test('AC-13 overlapping workstation booking is refused with 409') |
+| AC-14 | test('AC-14 unauthenticated booking request is refused with 401') |
+| AC-15 | test('AC-15 cancelling another user booking returns 403') |
 
 ## Spec vs result
 - Status: Ready for implementation and verification.
