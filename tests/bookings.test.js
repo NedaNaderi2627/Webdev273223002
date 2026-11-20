@@ -187,6 +187,12 @@ test('recommendations service: model, fetch path, all fallback branches, and tim
     );
     assert.strictEqual(timeoutRes.source, 'fallback');
     assert.strictEqual(timeoutRes.recommendedSlot, null);
+
+    clean(ws, date);
+    createBooking({ userId: 1, workstationId: ws, date, startTime: '16:00', endTime: '17:00' });
+    const afterLateBooking = await recommendTimeSlots({ userId: 1, workstationId: ws, date });
+    assert.strictEqual(afterLateBooking.source, 'fallback');
+    assert.strictEqual(afterLateBooking.slots.length, 3);
   } finally {
     globalThis.fetch = origFetch;
     if (prevKey !== undefined) process.env.GEMINI_API_KEY = prevKey;
