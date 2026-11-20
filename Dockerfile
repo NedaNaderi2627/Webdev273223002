@@ -14,4 +14,4 @@ ENV PORT=3000
 
 EXPOSE 3000
 
-CMD ["node", "mcp-server/server.js"]
+CMD ["node", "server.js"]
