@@ -84,6 +84,7 @@ test('recommendations service: model, fetch path, all fallback branches, and tim
 
   try {
     createBooking({ userId: 1, workstationId: ws, date, startTime: '12:00', endTime: '13:00' });
+    createBooking({ userId: 1, workstationId: ws, date, startTime: '13:00', endTime: '15:00' });
     const afterMidDay = await recommendTimeSlots({ userId: 1, workstationId: ws, date });
     assert.strictEqual(afterMidDay.source, 'fallback');
 
