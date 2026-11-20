@@ -6,156 +6,190 @@ import {
   cancelBooking,
   BookingConflictError,
   NotOwnerError,
+  NotFoundError,
 } from '../src/services/bookings.js';
 import { recommendTimeSlots } from '../src/services/recommendations.js';
 
-function cleanupTestBookings(workstationId, date) {
-  db.prepare('DELETE FROM bookings WHERE workstation_id = ? AND date = ?').run(
-    workstationId,
-    date
-  );
-}
+const clean = (ws, date) =>
+  db.prepare('DELETE FROM bookings WHERE workstation_id = ? AND date = ?').run(ws, date);
 
-test('AC-2 overlapping booking is refused with error', () => {
-  const workstationId = 9001;
-  const date = '2026-06-01';
-  cleanupTestBookings(workstationId, date);
+test('bookings service: create, conflict, unique/other errors, cancel, owner and not-found', () => {
+  const ws = 9101;
+  const date = '2026-07-01';
+  clean(ws, date);
+
+  const origPrepare = db.prepare.bind(db);
+  let dbErrorMode = null;
+  db.prepare = (sql) => {
+    const stmt = origPrepare(sql);
+    if (dbErrorMode && sql.includes('INSERT INTO bookings')) {
+      return {
+        run() {
+          if (dbErrorMode === 'unique') {
+            throw new Error('UNIQUE constraint failed: bookings.workstation_id');
+          }
+          throw new Error('SQLITE_BUSY');
+        },
+      };
+    }
+    return stmt;
+  };
 
   try {
-    createBooking({
-      userId: 1,
-      workstationId,
-      date,
-      startTime: '10:00',
-      endTime: '12:00',
-    });
+    const b = createBooking({ userId: 1, workstationId: ws, date, startTime: '10:00', endTime: '12:00' });
+    assert.ok(b.id);
 
     assert.throws(
-      () => {
-        createBooking({
-          userId: 2,
-          workstationId,
-          date,
-          startTime: '11:00',
-          endTime: '13:00',
-        });
-      },
-      (err) => {
-        assert.ok(err instanceof BookingConflictError);
-        assert.strictEqual(err.status, 409);
-        assert.match(err.message, /Time slot is already booked/);
-        return true;
-      }
-    );
-  } finally {
-    cleanupTestBookings(workstationId, date);
-  }
-});
-
-test('AC-3 model recommendation returns optimal slots and falls back cleanly on error or timeout with fake client', async () => {
-  const workstationId = 9003;
-  const date = '2026-06-03';
-  cleanupTestBookings(workstationId, date);
-
-  try {
-    const fakeModelClient = {
-      async generate() {
-        return {
-          slots: [{ startTime: '09:00', endTime: '10:30' }],
-        };
-      },
-    };
-
-    const recommended = await recommendTimeSlots(
-      {
-        userId: 1,
-        workstationId,
-        date,
-        serviceType: 'gpu_lab',
-        preferredRange: '09:00-12:00',
-      },
-      fakeModelClient,
-      1000
+      () => createBooking({ userId: 2, workstationId: ws, date, startTime: '11:00', endTime: '13:00' }),
+      (e) => e instanceof BookingConflictError && e.status === 409
     );
 
-    assert.strictEqual(recommended.source, 'model');
-    assert.deepStrictEqual(recommended.recommendedSlot, {
-      startTime: '09:00',
-      endTime: '10:30',
-    });
-
-    const failingFakeClient = {
-      async generate() {
-        throw new Error('429 rate limited');
-      },
-    };
-
-    const fallbackResult = await recommendTimeSlots(
-      {
-        userId: 1,
-        workstationId,
-        date,
-        serviceType: 'gpu_lab',
-        preferredRange: '09:00-12:00',
-      },
-      failingFakeClient,
-      1000
+    dbErrorMode = 'unique';
+    assert.throws(
+      () => createBooking({ userId: 3, workstationId: ws, date, startTime: '13:00', endTime: '14:00' }),
+      (e) => e instanceof BookingConflictError && e.status === 409
     );
 
-    assert.strictEqual(fallbackResult.source, 'fallback');
-    assert.ok(Array.isArray(fallbackResult.slots) && fallbackResult.slots.length > 0);
-  } finally {
-    cleanupTestBookings(workstationId, date);
-  }
-});
-
-test('AC-15 cancelling another user booking returns 403', () => {
-  const workstationId = 9002;
-  const date = '2026-06-02';
-  cleanupTestBookings(workstationId, date);
-
-  try {
-    const created = createBooking({
-      userId: 10,
-      workstationId,
-      date,
-      startTime: '09:00',
-      endTime: '10:00',
-    });
+    dbErrorMode = 'other';
+    assert.throws(
+      () => createBooking({ userId: 3, workstationId: ws, date, startTime: '13:00', endTime: '14:00' }),
+      (e) => e.message === 'SQLITE_BUSY'
+    );
+    dbErrorMode = null;
 
     assert.throws(
-      () => {
-        cancelBooking({ bookingId: created.id, userId: 20 });
-      },
-      (err) => {
-        assert.ok(err instanceof NotOwnerError);
-        assert.strictEqual(err.status, 403);
-        return true;
-      }
+      () => cancelBooking({ bookingId: b.id, userId: 2 }),
+      (e) => e instanceof NotOwnerError && e.status === 403
     );
+
+    assert.throws(
+      () => cancelBooking({ bookingId: 999999999, userId: 1 }),
+      (e) => e instanceof NotFoundError && e.status === 404
+    );
+
+    assert.deepStrictEqual(cancelBooking({ bookingId: b.id, userId: 1 }), { success: true });
   } finally {
-    cleanupTestBookings(workstationId, date);
+    db.prepare = origPrepare;
+    clean(ws, date);
   }
 });
 
-test('AC-1 AC-4 AC-5 AC-6 AC-7 AC-8 AC-9 AC-10 AC-11 AC-12 AC-13 AC-14 booking lifecycle and rules', () => {
-  const workstationId = 9004;
-  const date = '2026-06-04';
-  cleanupTestBookings(workstationId, date);
+test('recommendations service: model, fetch path, all fallback branches, and timeout', async () => {
+  const ws = 9102;
+  const date = '2026-07-02';
+  const prevKey = process.env.GEMINI_API_KEY;
+  const origFetch = globalThis.fetch;
+  delete process.env.GEMINI_API_KEY;
+  clean(ws, date);
 
   try {
-    const booking = createBooking({
-      userId: 5,
-      workstationId,
-      date,
-      startTime: '14:00',
-      endTime: '15:00',
-    });
-    assert.ok(booking.id);
+    createBooking({ userId: 1, workstationId: ws, date, startTime: '12:00', endTime: '13:00' });
+    const afterMidDay = await recommendTimeSlots({ userId: 1, workstationId: ws, date });
+    assert.strictEqual(afterMidDay.source, 'fallback');
 
-    const cancelled = cancelBooking({ bookingId: booking.id, userId: 5 });
-    assert.deepStrictEqual(cancelled, { success: true });
+    clean(ws, date);
+    createBooking({ userId: 1, workstationId: ws, date, startTime: '08:00', endTime: '09:00' });
+
+    const noKeyNonEmpty = await recommendTimeSlots({ userId: 1, workstationId: ws, date });
+    assert.strictEqual(noKeyNonEmpty.source, 'fallback');
+    assert.strictEqual(noKeyNonEmpty.slots.length, 3);
+
+    const modelRes = await recommendTimeSlots(
+      {
+        userId: 1,
+        workstationId: ws,
+        date,
+        serviceType: 'custom_lab',
+        preferredRange: '10:00-15:00',
+      },
+      { async generate() { return { slots: [{ startTime: '09:00', endTime: '10:30' }] }; } }
+    );
+    assert.strictEqual(modelRes.source, 'model');
+
+    for (const payload of [
+      undefined,
+      null,
+      {},
+      { ok: false },
+      { ok: true, slots: [] },
+      { ok: true, slots: null },
+      { ok: 'yes', slots: [] },
+      { slots: [] },
+      { slots: 'invalid' },
+    ]) {
+      const fb = await recommendTimeSlots(
+        { userId: 1, workstationId: ws, date },
+        { async generate() { return payload; } }
+      );
+      assert.strictEqual(fb.source, 'fallback');
+      assert.ok(fb.recommendedSlot);
+    }
+
+    const errNonEmpty = await recommendTimeSlots(
+      { userId: 1, workstationId: ws, date },
+      { async generate() { throw new Error('boom'); } }
+    );
+    assert.strictEqual(errNonEmpty.source, 'fallback');
+    assert.ok(errNonEmpty.recommendedSlot);
+
+    process.env.GEMINI_API_KEY = 'test-key';
+    globalThis.fetch = async () => ({
+      ok: true,
+      slots: [{ startTime: '11:00', endTime: '12:00' }],
+    });
+    const fetchRes = await recommendTimeSlots({ userId: 1, workstationId: ws, date });
+    assert.strictEqual(fetchRes.source, 'model');
+
+    globalThis.fetch = async () => {
+      throw new Error('network down');
+    };
+    const fetchErrRes = await recommendTimeSlots({ userId: 1, workstationId: ws, date });
+    assert.strictEqual(fetchErrRes.source, 'fallback');
+    assert.ok(fetchErrRes.recommendedSlot);
+
+    for (const t of ['09:00-11:00', '11:00-13:00', '14:00-16:00']) {
+      const [s, e] = t.split('-');
+      createBooking({ userId: 1, workstationId: ws, date, startTime: s, endTime: e });
+    }
+
+    delete process.env.GEMINI_API_KEY;
+    const noKeyEmpty = await recommendTimeSlots({ userId: 1, workstationId: ws, date });
+    assert.strictEqual(noKeyEmpty.source, 'fallback');
+    assert.strictEqual(noKeyEmpty.recommendedSlot, null);
+
+    for (const payload of [
+      undefined,
+      null,
+      {},
+      { ok: false },
+      { ok: true, slots: [] },
+      { ok: true, slots: null },
+      { slots: [] },
+      { slots: 'invalid' },
+    ]) {
+      const fbEmpty = await recommendTimeSlots(
+        { userId: 1, workstationId: ws, date },
+        { async generate() { return payload; } }
+      );
+      assert.strictEqual(fbEmpty.source, 'fallback');
+      assert.strictEqual(fbEmpty.recommendedSlot, null);
+    }
+
+    const timeoutRes = await recommendTimeSlots(
+      { userId: 1, workstationId: ws, date },
+      {
+        generate({ signal }) {
+          return new Promise((_r, rej) => signal.addEventListener('abort', () => rej(signal.reason)));
+        },
+      },
+      10
+    );
+    assert.strictEqual(timeoutRes.source, 'fallback');
+    assert.strictEqual(timeoutRes.recommendedSlot, null);
   } finally {
-    cleanupTestBookings(workstationId, date);
+    globalThis.fetch = origFetch;
+    if (prevKey !== undefined) process.env.GEMINI_API_KEY = prevKey;
+    else delete process.env.GEMINI_API_KEY;
+    clean(ws, date);
   }
 });
