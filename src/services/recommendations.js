@@ -30,17 +30,19 @@ export async function recommendTimeSlots(
 ) {
   const fallback = getFallbackSlots({ workstationId, date });
   const apiKey = process.env.GEMINI_API_KEY;
+  const fallbackResult = {
+    source: 'fallback',
+    recommendedSlot: fallback[0] ?? null,
+    slots: fallback,
+  };
 
   if (!client && !apiKey) {
-    return {
-      source: 'fallback',
-      recommendedSlot: fallback[0] ?? null,
-      slots: fallback,
-    };
+    return fallbackResult;
   }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let result = fallbackResult;
 
   try {
     const prompt = `Suggest optimal available lab slot for service "${serviceType}" on date ${date} within preferred range ${preferredRange} (user ${userId}, workstation ${workstationId}).`;
@@ -59,42 +61,24 @@ export async function recommendTimeSlots(
           }
         );
 
-    if (!response) {
-      return {
-        source: 'fallback',
-        recommendedSlot: fallback[0] ?? null,
-        slots: fallback,
-      };
-    }
-
-    if (typeof response.ok === 'boolean' && !response.ok) {
-      return {
-        source: 'fallback',
-        recommendedSlot: fallback[0] ?? null,
-        slots: fallback,
-      };
-    }
-
-    if (Array.isArray(response.slots) && response.slots.length > 0) {
-      return {
+    const isHttpError = typeof response?.ok === 'boolean' && !response.ok;
+    if (
+      response &&
+      !isHttpError &&
+      Array.isArray(response.slots) &&
+      response.slots.length > 0
+    ) {
+      result = {
         source: 'model',
         recommendedSlot: response.slots[0],
         slots: response.slots,
       };
     }
-
-    return {
-      source: 'fallback',
-      recommendedSlot: fallback[0] ?? null,
-      slots: fallback,
-    };
   } catch (_err) {
-    return {
-      source: 'fallback',
-      recommendedSlot: fallback[0] ?? null,
-      slots: fallback,
-    };
+    result = fallbackResult;
   } finally {
     clearTimeout(timer);
   }
+
+  return result;
 }
